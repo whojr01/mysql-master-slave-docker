@@ -9,44 +9,11 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     gosu nobody true
 
-RUN mkdir /docker-entrypoint-initdb.d /var/lib/mysql-files
+RUN mkdir /docker-entrypoint-initdb.d /var/lib/mysql-files /var/lib/mysql_slave \
+          /var/lib/mysql /var/log/mysql /var/log/mysql_slave \
+          && chown mysql:mysql -R /var/lib/mysql-files /var/lib/mysql_slave \
+          /var/lib/mysql /var/log/mysql /var/log/mysql_slave
 
-# TODO: Clean this up... 
-# add gosu for easy step-down from root
-# ENV GOSU_VERSION 1.7
-# RUN set -x \
-#         && apt-get update && apt-get install -y --no-install-recommends ca-certificates wget && rm -rf /var/lib/apt/lists/* \
-#         && wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$(dpkg --print-architecture)" \
-#         && wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$(dpkg --print-architecture).asc" \
-#         && export GNUPGHOME="$(mktemp -d)" \
-#         && gpg --batch --keyserver ha.pool.sks-keyservers.net --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 \
-#         && gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu \
-#         && gpgconf --kill all \
-#         && rm -rf "$GNUPGHOME" /usr/local/bin/gosu.asc \
-#         && chmod +x /usr/local/bin/gosu \
-#         && gosu nobody true \
-#         && apt-get purge -y --auto-remove ca-certificates wget
-
-# RUN set -eux; \
-# 	apt-get update; \
-# 	apt-get install -y gosu; \
-# 	rm -rf /var/lib/apt/lists/*; \
-# # verify that the binary works
-# 	gosu nobody true
-
-
-# RUN apt-get update && apt-get install -y --no-install-recommends \
-# # for MYSQL_RANDOM_ROOT_PASSWORD
-#                 pwgen \
-# # for mysql_ssl_rsa_setup
-#                 openssl \
-# # FATAL ERROR: please install the following Perl modules before executing /usr/local/mysql/scripts/mysql_install_db:
-# # File::Basename
-# # File::Copy
-# # Sys::Hostname
-# # Data::Dumper
-#                 perl \
-#         && rm -rf /var/lib/apt/lists/*
 
 # gpg: key 5072E1F5: public key "MySQL Release Engineering <mysql-build@oss.oracle.com>" imported
 RUN set -ex; \
@@ -77,13 +44,19 @@ RUN { \
 # ensure that /var/run/mysqld (used for socket and lock files) is writable regardless of the UID our mysqld instance ends up having at runtime
         && chmod 777 /var/run/mysqld
 
+
+## TODO: REMOVE BELOW FOR DEBUG ONLY
+RUN apt-get update && apt-get install -y procps net-tools iproute2 file vim
+
 VOLUME /var/lib/mysql
 # Config files
-COPY  etc-mysql/mysql/conf.d /etc/mysql/
+COPY  etc-mysql/mysql/ /etc/mysql/
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN ln -s usr/local/bin/docker-entrypoint.sh /entrypoint.sh # backwards compat
+# RUN mysqld --initialize --user=mysql --basedir=/usr --datadir=/var/lib/mysql_slave
+RUN mysqld --initialize --defaults-file=/etc/mysql/my.cnf
 ENTRYPOINT ["docker-entrypoint.sh"]
 
-EXPOSE 3306 33060
-CMD ["mysqld"]
+EXPOSE 3306 3307 3308 33060 33161 33262
+CMD ["bash"]
 
