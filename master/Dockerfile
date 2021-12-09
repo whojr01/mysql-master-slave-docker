@@ -1,21 +1,27 @@
+# Step *** 1/18
 FROM debian:bullseye-slim
 
 # add our user and group first to make sure their IDs get assigned consistently, regardless of whatever dependencies get added
+# Step *** 2/18
 RUN groupadd -r mysql && useradd -r -g mysql mysql
 
+# Step *** 3/18
 RUN apt-get update && \
     apt-get -y upgrade && \
     apt-get install -y --no-install-recommends gnupg dirmngr gosu pwgen openssl perl && \
     rm -rf /var/lib/apt/lists/* && \
     gosu nobody true
 
+# Step *** 4/18
+# Check for missing chown in output
 RUN mkdir /docker-entrypoint-initdb.d /var/lib/mysql-files /var/lib/mysql_slave \
-          /var/lib/mysql /var/log/mysql /var/log/mysql_slave \
-          && chown mysql:mysql -R /var/lib/mysql-files /var/lib/mysql_slave \
+          /var/lib/mysql /var/log/mysql /var/log/mysql_slave; \
+          chown mysql:mysql -R /var/lib/mysql_slave \
           /var/lib/mysql /var/log/mysql /var/log/mysql_slave
 
 
 # gpg: key 5072E1F5: public key "MySQL Release Engineering <mysql-build@oss.oracle.com>" imported
+# Step *** 5/18
 RUN set -ex; \
         key='A4A9406876FCBD3C456770C88C718D3B5072E1F5'; \
         export GNUPGHOME="$(mktemp -d)"; \
@@ -25,13 +31,17 @@ RUN set -ex; \
         rm -rf "$GNUPGHOME"; \
         apt-key list > /dev/null
 
+# Step *** 6/18
 ENV MYSQL_MAJOR 8.0
+# Step *** 7/18
 ENV MYSQL_VERSION 8.0.27-1debian11
 
+# Step *** 8/18
 RUN echo "deb http://repo.mysql.com/apt/debian/ bullseye mysql-${MYSQL_MAJOR}" > /etc/apt/sources.list.d/mysql.list
 
 # the "/var/lib/mysql" stuff here is because the mysql-server postinst doesn't have an explicit way to disable the mysql_install_db codepath besides having a database already "configured" (ie, stuff in /var/lib/mysql/mysql)
 # also, we set debconf keys to make APT a little quieter
+# Step *** 9/18
 RUN { \
                 echo mysql-community-server mysql-community-server/data-dir select ''; \
                 echo mysql-community-server mysql-community-server/root-pass password ''; \
@@ -46,17 +56,62 @@ RUN { \
 
 
 ## TODO: REMOVE BELOW FOR DEBUG ONLY
+# Step *** 10/18
 RUN apt-get update && apt-get install -y procps net-tools iproute2 file vim
 
-VOLUME /var/lib/mysql
+
 # Config files
-COPY  etc-mysql/mysql/ /etc/mysql/
+# Step *** 12/18
+COPY  mysql/* /etc/mysql/
+
+# Step *** 13/18
 COPY docker-entrypoint.sh /usr/local/bin/
+
+COPY replication.sh /scripts
+COPY config_users.sql /scripts
+RUN chmod 777 /scripts/replication.sh
+
+#
+# --------------------------
+# Resequence from here
+#---------------------------
+
 RUN ln -s usr/local/bin/docker-entrypoint.sh /entrypoint.sh # backwards compat
-# RUN mysqld --initialize --user=mysql --basedir=/usr --datadir=/var/lib/mysql_slave
-RUN mysqld --initialize --defaults-file=/etc/mysql/my.cnf
+
+RUN mysqld --initialize --user=mysql --basedir=/usr --datadir=/var/lib/mysql > /var/log/mysql/error_master.log 2>&1; \
+    export MPASS=$(cat /var/log/mysql/error_master.log | tail -1 | sed -e 's/.*localhost: \(.*\)$/\1/'); \
+    gosu mysql mysql -uroot -p$MPASS --port 3306 --protocol=tcp --connect-expired-password < /scripts/config_users.sql; \
+    kill -9 $(cat /var/lib/mysql/*.pid);
+
+RUN mysqld --initialize --user=mysql --basedir=/usr --datadir=/var/lib/mysql_slave > /var/log/mysql_slave/error_slave.log 2>&1; \
+    export SPASS=$(cat /var/log/mysql_slave/error_slave.log | tail -1 | sed -e 's/.*localhost: \(.*\)$/\1/'); \
+    gosu mysql mysql -uroot -p$SPASS --port 3306 --protocol=tcp --connect-expired-password < /scripts/config_users.sql; \
+    kill -9 $(cat /var/lib/mysql_slave/*.pid);
+
+
+RUN chown -R mysql:mysql /var/log/{mysql,mysql_slave}
+
+RUN mysqld_multi start
+
+# TODO: Next line for debug purposes only
+RUN mysqld_multi report
+
+RUN mysqldump -uroot -p --host=localhost --port=3306 --protocol=tcp --all-databases --source-data=2 > /var/log/mysql/replicationdump.sql
+
+RUN /scripts/replication.sh /var/log/mysql/replicationdump.sql > /scripts/replication_cmd.sql
+
+RUN mysql -uroot -pmysql-pass --port=3307 --protocol=tcp < /scripts/replication_cmd.sql
+
+RUN mysqld_multi stop
+
+RUN mysqld_multi report
+
+VOLUME /var/lib/mysql /var/lib/mysql_slave
+
+EXPOSE 3306 3307 33161 33262
+
 ENTRYPOINT ["docker-entrypoint.sh"]
 
-EXPOSE 3306 3307 3308 33060 33161 33262
-CMD ["bash"]
+
+CMD ["RUN mysqld_multi", "start"]
 
