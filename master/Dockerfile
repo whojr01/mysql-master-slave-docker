@@ -16,7 +16,7 @@ RUN apt-get update && \
 # Check for missing chown in output
 RUN mkdir /docker-entrypoint-initdb.d /var/lib/mysql-files /var/lib/mysql_slave \
           /var/lib/mysql /var/log/mysql /var/log/mysql_slave; \
-          chown mysql:mysql -R /var/lib/mysql_slave \
+          chown mysql:mysql -R /var/lib/mysql_slave /var/lib/mysql-files \
           /var/lib/mysql /var/log/mysql /var/log/mysql_slave
 
 
@@ -52,7 +52,7 @@ RUN { \
         && rm -rf /var/lib/mysql && mkdir -p /var/lib/mysql /var/run/mysqld \
         && chown -R mysql:mysql /var/lib/mysql /var/run/mysqld \
 # ensure that /var/run/mysqld (used for socket and lock files) is writable regardless of the UID our mysqld instance ends up having at runtime
-        && chmod 777 /var/run/mysqld
+        && chmod 700 /var/run/mysqld
 
 
 ## TODO: REMOVE BELOW FOR DEBUG ONLY
@@ -62,13 +62,14 @@ RUN apt-get update && apt-get install -y procps net-tools iproute2 file vim
 
 # Config files
 # Step *** 12/18
-COPY  mysql/* /etc/mysql/
+COPY  mysql/my.cnf /etc/mysql/
+COPY mysql/conf.d/docker.cnf /etc/mysql/conf.d/
 
 # Step *** 13/18
 COPY docker-entrypoint.sh /usr/local/bin/
 
-COPY replication.sh /scripts
-COPY config_users.sql /scripts
+COPY replication.sh /scripts/
+COPY config_users.sql /scripts/
 RUN chmod 777 /scripts/replication.sh
 
 #
@@ -78,40 +79,45 @@ RUN chmod 777 /scripts/replication.sh
 
 RUN ln -s usr/local/bin/docker-entrypoint.sh /entrypoint.sh # backwards compat
 
-RUN mysqld --initialize --user=mysql --basedir=/usr --datadir=/var/lib/mysql > /var/log/mysql/error_master.log 2>&1; \
-    export MPASS=$(cat /var/log/mysql/error_master.log | tail -1 | sed -e 's/.*localhost: \(.*\)$/\1/'); \
-    gosu mysql mysql -uroot -p$MPASS --port 3306 --protocol=tcp --connect-expired-password < /scripts/config_users.sql; \
-    kill -9 $(cat /var/lib/mysql/*.pid);
+RUN chmod -R 700 /var/lib/mysql /var/lib/mysql-files /var/lib/mysql_slave
 
-RUN mysqld --initialize --user=mysql --basedir=/usr --datadir=/var/lib/mysql_slave > /var/log/mysql_slave/error_slave.log 2>&1; \
-    export SPASS=$(cat /var/log/mysql_slave/error_slave.log | tail -1 | sed -e 's/.*localhost: \(.*\)$/\1/'); \
-    gosu mysql mysql -uroot -p$SPASS --port 3306 --protocol=tcp --connect-expired-password < /scripts/config_users.sql; \
-    kill -9 $(cat /var/lib/mysql_slave/*.pid);
+RUN gosu mysql mysqld --initialize --basedir=/usr --user=mysql --datadir=/var/lib/mysql --port=3306 --secure-file-priv=/var/lib/mysql > /var/log/mysql/error_master.log 2>&1
+RUN gosu mysql mysqld --datadir=/var/lib/mysql & \
+    && while [ ! -f /var/lib/mysql/*.pid ]; do sleep 2; echo slept 2; done \
+    && export MPASS=$(cat /var/log/mysql/error_master.log | tail -1 | sed -e 's/.*localhost: \(.*\)$/\1/') \
+    && gosu mysql mysql -uroot -p$MPASS --connect-expired-password < /scripts/config_users.sql
+
+# RUN gosu mysql mysql -uroot -p$MPASS --port 3306 --protocol=tcp --connect-expired-password < /scripts/config_users.sql
+
+# RUN mysqld --initialize --user=mysql --basedir=/usr --datadir=/var/lib/mysql_slave |tee -a /var/log/mysql_slave/error_slave.log 2>&1; \
+#     export SPASS=$(cat /var/log/mysql_slave/error_slave.log | tail -1 | sed -e 's/.*localhost: \(.*\)$/\1/'); \
+#     gosu mysql mysql -uroot -p$SPASS --port 3306 --protocol=tcp --connect-expired-password < /scripts/config_users.sql; \
+#     kill -9 $(cat /var/lib/mysql_slave/*.pid);
 
 
-RUN chown -R mysql:mysql /var/log/{mysql,mysql_slave}
+# RUN chown -R mysql:mysql /var/log/{mysql,mysql_slave}
 
-RUN mysqld_multi start
+# RUN mysqld_multi start
 
-# TODO: Next line for debug purposes only
-RUN mysqld_multi report
+# # TODO: Next line for debug purposes only
+# RUN mysqld_multi report
 
-RUN mysqldump -uroot -p --host=localhost --port=3306 --protocol=tcp --all-databases --source-data=2 > /var/log/mysql/replicationdump.sql
+# RUN mysqldump -uroot -p --host=localhost --port=3306 --protocol=tcp --all-databases --source-data=2 > /var/log/mysql/replicationdump.sql
 
-RUN /scripts/replication.sh /var/log/mysql/replicationdump.sql > /scripts/replication_cmd.sql
+# RUN /scripts/replication.sh /var/log/mysql/replicationdump.sql > /scripts/replication_cmd.sql
 
-RUN mysql -uroot -pmysql-pass --port=3307 --protocol=tcp < /scripts/replication_cmd.sql
+# RUN mysql -uroot -pmysql-pass --port=3307 --protocol=tcp < /scripts/replication_cmd.sql
 
-RUN mysqld_multi stop
+# RUN mysqld_multi stop
 
-RUN mysqld_multi report
+# RUN mysqld_multi report
 
 VOLUME /var/lib/mysql /var/lib/mysql_slave
 
 EXPOSE 3306 3307 33161 33262
 
-ENTRYPOINT ["docker-entrypoint.sh"]
+#ENTRYPOINT ["docker-entrypoint.sh"]
 
 
-CMD ["RUN mysqld_multi", "start"]
-
+# CMD ["mysqld_multi", "start"]
+CMD ["/bin/bash"]
