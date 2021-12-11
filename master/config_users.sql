@@ -8,10 +8,17 @@
 
 ALTER USER 'root'@'localhost' IDENTIFIED BY 'mysql-pass';
 
+CREATE USER 'root'@'127.0.0.1' IDENTIFIED BY 'mysql-pass';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost', 'root'@'127.0.0.1' WITH GRANT OPTION;
+
 CREATE USER 'mysql'@'localhost' IDENTIFIED BY 'mysql-pass';
-GRANT CREATE, INSERT, DROP, UPDATE, SELECT,SHUTDOWN ON *.* TO 'mysql'@'localhost';
+CREATE USER 'mysql'@'127.0.0.1' IDENTIFIED BY 'mysql-pass';
+
+GRANT CREATE, INSERT, DROP, UPDATE, SELECT, SHUTDOWN ON *.* TO 'mysql'@'localhost', 'mysql'@'127.0.0.1';
 
 CREATE USER 'replication'@'localhost' IDENTIFIED BY 'replication';
-GRANT REPLICATION SLAVE ON *.* TO 'replication'@'localhost';
+CREATE USER 'replication'@'127.0.0.1' IDENTIFIED BY 'replication';
+
+GRANT REPLICATION SLAVE ON *.* TO 'replication'@'localhost', 'replication'@'127.0.0.1';
 
 flush privileges;
