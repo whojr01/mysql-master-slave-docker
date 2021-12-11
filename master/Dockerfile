@@ -70,7 +70,7 @@ COPY docker-entrypoint.sh /usr/local/bin/
 
 COPY replication.sh /scripts/
 COPY config_users.sql /scripts/
-RUN chmod 777 /scripts/replication.sh
+RUN chmod 755 /scripts/replication.sh
 
 #
 # --------------------------
@@ -79,38 +79,31 @@ RUN chmod 777 /scripts/replication.sh
 
 RUN ln -s usr/local/bin/docker-entrypoint.sh /entrypoint.sh # backwards compat
 
-RUN chmod -R 700 /var/lib/mysql /var/lib/mysql-files /var/lib/mysql_slave
-
-RUN gosu mysql mysqld --initialize --basedir=/usr --user=mysql --datadir=/var/lib/mysql --port=3306 --secure-file-priv=/var/lib/mysql > /var/log/mysql/error_master.log 2>&1
-RUN gosu mysql mysqld --datadir=/var/lib/mysql & \
-    && while [ ! -f /var/lib/mysql/*.pid ]; do sleep 2; echo slept 2; done \
+RUN chmod -R 700 /var/lib/mysql /var/lib/mysql-files /var/lib/mysql_slave \
+    && gosu mysql mysqld --initialize --basedir=/usr --user=mysql --datadir=/var/lib/mysql --port=3306 --secure-file-priv=/var/lib/mysql > /var/log/mysql/error_master.log 2>&1 \
+    && gosu mysql mysqld --datadir=/var/lib/mysql & \
+    while [ ! -f /var/lib/mysql/*.pid ]; do sleep 2; echo mysql looking for pid; done \
     && export MPASS=$(cat /var/log/mysql/error_master.log | tail -1 | sed -e 's/.*localhost: \(.*\)$/\1/') \
-    && gosu mysql mysql -uroot -p$MPASS --connect-expired-password < /scripts/config_users.sql
+    && gosu mysql mysql -uroot -p$MPASS --connect-expired-password < /scripts/config_users.sql \
+    && kill -TERM $(cat /var/lib/mysql/*.pid) \
+    && gosu mysql mysqld --initialize --basedir=/usr --user=mysql --datadir=/var/lib/mysql_slave --port=3306 --secure-file-priv=/var/lib/mysql_slave > /var/log/mysql_slave/error_slave.log 2>&1 \
+    && gosu mysql mysqld --datadir=/var/lib/mysql_slave & \
+    while [ ! -f /var/lib/mysql_slave/*.pid ]; do sleep 2; echo mysql_slave looking for pid; done \
+    && export MPASS=$(cat /var/log/mysql_slave/error_slave.log | tail -1 | sed -e 's/.*localhost: \(.*\)$/\1/') \
+    && gosu mysql mysql -uroot -p$MPASS --connect-expired-password < /scripts/config_users.sql \
+    && kill -TERM $(cat /var/lib/mysql_slave/*.pid) \
+    && chown -R mysql:mysql /var/log/mysql /var/log/mysql_slave \
+    && ls -l /var/lib/mysql/*.pid /var/lib/mysql_slave/*.pid || true \
+    && rm -f /var/lib/mysql/*.pid /var/lib/mysql_slave/*.pid || true \
+    && mysqld_multi report \
+    && mysqld_multi start \
+    && sleep 30 \
+    && mysqld_multi report \
+    && mysqldump -uroot -pmysql-pass --port=3306 --protocol=tcp --all-databases --source-data=2 > /var/log/mysql/replicationdump.sql \
+    && /scripts/replication.sh /var/log/mysql/replicationdump.sql > /scripts/replication_cmd.sql \
+    && mysql -uroot -pmysql-pass --port=3307 --protocol=tcp < /scripts/replication_cmd.sql
 
-# RUN gosu mysql mysql -uroot -p$MPASS --port 3306 --protocol=tcp --connect-expired-password < /scripts/config_users.sql
-
-# RUN mysqld --initialize --user=mysql --basedir=/usr --datadir=/var/lib/mysql_slave |tee -a /var/log/mysql_slave/error_slave.log 2>&1; \
-#     export SPASS=$(cat /var/log/mysql_slave/error_slave.log | tail -1 | sed -e 's/.*localhost: \(.*\)$/\1/'); \
-#     gosu mysql mysql -uroot -p$SPASS --port 3306 --protocol=tcp --connect-expired-password < /scripts/config_users.sql; \
-#     kill -9 $(cat /var/lib/mysql_slave/*.pid);
-
-
-# RUN chown -R mysql:mysql /var/log/{mysql,mysql_slave}
-
-# RUN mysqld_multi start
-
-# # TODO: Next line for debug purposes only
-# RUN mysqld_multi report
-
-# RUN mysqldump -uroot -p --host=localhost --port=3306 --protocol=tcp --all-databases --source-data=2 > /var/log/mysql/replicationdump.sql
-
-# RUN /scripts/replication.sh /var/log/mysql/replicationdump.sql > /scripts/replication_cmd.sql
-
-# RUN mysql -uroot -pmysql-pass --port=3307 --protocol=tcp < /scripts/replication_cmd.sql
-
-# RUN mysqld_multi stop
-
-# RUN mysqld_multi report
+RUN mysqld_multi report
 
 VOLUME /var/lib/mysql /var/lib/mysql_slave
 
